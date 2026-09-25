@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "postgres-readonly": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${RECON_DB_READONLY_URL}"]
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"]
+    }
+  }
+}
