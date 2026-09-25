@@ -1,0 +1,9 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/recon
+    username: recon
+    password: recon
+  jpa:
+    open-in-view: false   # CONCEPT: stops lazy DB queries leaking into the web layer
+    hibernate:
+      ddl-auto: validate  # CONCEPT: Flyway owns the schema; Hibernate only checks it matches
