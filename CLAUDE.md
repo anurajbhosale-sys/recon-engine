@@ -20,6 +20,8 @@ explain every line. Understanding beats speed.
    the core logic as `TODO(human)` when he's in Learning mode.
 4. Significant decisions get an ADR in `docs/adr/` (copy `000-template.md`).
 5. Never skip ahead of the current phase or add infrastructure before it's justified.
+6. Code in ledger/ and ingestion/ is hand-written by Anuraj and is the reference implementation.
+   Match its patterns; don't refactor it without asking.
 
 ## Invariants (never violate)
 - Money = `BIGINT` minor units + ISO currency code. Never `double`/`float`.
@@ -32,12 +34,14 @@ explain every line. Understanding beats speed.
 - Never edit an applied Flyway migration (a hook enforces this).
 
 ## Stack & conventions
-- Java 21, Spring Boot (latest stable), build tool: <DECIDE IN PHASE 1, then record here>.
-- PostgreSQL + Flyway. Testcontainers for integration tests (no H2).
+- Java 21, Spring Boot 4 (modular starters; don't use Boot 3 patterns), Maven via ./mvnw.
+- Testcontainers for integration tests (never H2).
 - Plain UUID foreign keys over JPA associations unless an ADR says otherwise.
 - Package-by-feature modular monolith: `ingestion`, `ledger`, `matching`, `breaks`, `tenancy`,
   `ai`, `shared`. Modules call each other's public services, never each other's repositories.
-- Docker Compose for local dev; GitHub Actions CI.
 
 ## Commands
-<Fill in during Phase 1: build, test, run, start DB, lint/format.>
+- Start DB: `docker compose up -d` (Postgres on host port 5433)
+- Load MCP env: `set -a; source .env; set +a`
+- Run: `./mvnw spring-boot:run`
+- Test: `./mvnw verify`
