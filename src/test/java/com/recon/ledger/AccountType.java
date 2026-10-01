@@ -1,4 +1,4 @@
 package com.recon.ledger;
 
-public enum AccountType {
-}
+// CONCEPT: must match the CHECK constraint in V2__ledger.sql exactly
+public enum AccountType { ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE }
