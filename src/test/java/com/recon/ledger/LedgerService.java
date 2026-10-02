@@ -1,7 +1,9 @@
 package com.recon.ledger;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
 import java.util.UUID;
@@ -14,19 +16,36 @@ public class LedgerService {
     private final JournalEntryRepository entryRepository;
     private final JournalLineRepository lineRepository;
     private final AccountRepository accountRepository;
+    private final TransactionTemplate transactionTemplate;
 
-    // CONCEPT: constructor injection. Spring passes in the repositories automatically.
     public LedgerService(JournalEntryRepository entryRepository,
                          JournalLineRepository lineRepository,
-                         AccountRepository accountRepository) {
+                         AccountRepository accountRepository,
+                         PlatformTransactionManager transactionManager) {
         this.entryRepository = entryRepository;
         this.lineRepository = lineRepository;
         this.accountRepository = accountRepository;
+        // CONCEPT: TransactionTemplate = start/commit a transaction in code, not via annotation
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
-    @Transactional // CONCEPT: all-or-nothing. Any exception below rolls back every insert.
+    // CONCEPT: no @Transactional here on purpose. The transaction lives INSIDE execute(),
+    // so if it fails, we're back OUTSIDE it and can recover in a fresh one.
     public PostEntryResult postEntry(PostEntryCommand command) {
+        try {
+            return transactionTemplate.execute(status -> postInTransaction(command));
+        } catch (DataIntegrityViolationException e) {
+            // We lost a race: another request with the same key committed first.
+            // CONCEPT: this lookup runs in a NEW transaction; the failed one is gone.
+            return entryRepository
+                    .findByTenantIdAndIdempotencyKey(command.tenantId(), command.idempotencyKey())
+                    .map(existing -> new PostEntryResult(existing.getId(), false))
+                    // CONCEPT: if no entry exists, the violation was something ELSE → don't hide it
+                    .orElseThrow(() -> e);
+        }
+    }
 
+    private PostEntryResult postInTransaction(PostEntryCommand command) {
         // 1. Idempotency: check if this entry was already posted
         var existingEntry = entryRepository.findByTenantIdAndIdempotencyKey(
                 command.tenantId(),
@@ -36,19 +55,19 @@ public class LedgerService {
             return new PostEntryResult(existingEntry.get().getId(), false);
         }
 
-        // 2. Validate debit/credit balance rules (your Day 1 code)
+        // 2. Validate debit/credit balance rules
         JournalEntryRules.validate(command.lines());
 
         // 3. Validate accounts: exist, belong to this tenant, currency matches
         checkAccounts(command);
 
-        // 4. Create and save the journal entry (complete, via constructor; no setters)
+        // 4. Create and save the journal entry
         JournalEntry savedEntry = entryRepository.save(new JournalEntry(
                 command.tenantId(),
                 command.effectiveDate(),
                 command.description(),
                 command.idempotencyKey(),
-                null));                   // reversesEntryId: null for a normal entry
+                null));
 
         // 5. Build the lines, each pointing at the saved entry's id
         var journalLines = command.lines().stream()
@@ -72,15 +91,12 @@ public class LedgerService {
                 .map(JournalLineRequest::accountId)
                 .collect(Collectors.toSet());
 
-        // CONCEPT: ONE query for all accounts, not one query per line (avoids N+1)
         Map<UUID, Account> accounts = accountRepository.findAllById(accountIds).stream()
                 .collect(Collectors.toMap(Account::getId, Function.identity()));
 
         for (JournalLineRequest line : command.lines()) {
             Account account = accounts.get(line.accountId());
 
-            // CONCEPT: another tenant's account gets the SAME error as a missing one.
-            // Saying "that account belongs to someone else" would leak that it exists.
             if (account == null || !account.getTenantId().equals(command.tenantId())) {
                 throw new InvalidJournalEntryException("Unknown account: " + line.accountId());
             }

@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Import;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -87,4 +88,74 @@ class LedgerServiceIntegrationTest {
                 .isInstanceOf(InvalidJournalEntryException.class);
         assertThat(entryCountForTenant()).isZero();                 // nothing was saved
     }
+
+    @Test
+    void concurrentSameKeyCreatesOneEntry() throws Exception {
+        ExecutorService workers = Executors.newFixedThreadPool(2);   // CONCEPT: 2 workers running in parallel
+        try {
+            for (int round = 0; round < 10; round++) {
+                String key = "race-" + round;
+                CountDownLatch startingGun = new CountDownLatch(1);  // CONCEPT: both threads wait for the gun
+
+                Callable<PostEntryResult> task = () -> {
+                    startingGun.await();                             // wait at the line...
+                    return ledgerService.postEntry(charge(key));     // ...then post the SAME key
+                };
+
+                Future<PostEntryResult> a = workers.submit(task);
+                Future<PostEntryResult> b = workers.submit(task);
+                startingGun.countDown();                             // 🔫 both go at once
+
+                PostEntryResult resultA = a.get();                   // CONCEPT: .get() rethrows if that thread crashed
+                PostEntryResult resultB = b.get();
+
+                assertThat(resultA.entryId()).isEqualTo(resultB.entryId());   // both point to ONE entry
+                assertThat(resultA.created() ^ resultB.created()).isTrue();   // exactly one says "I created it"
+            }
+            assertThat(entryCountForTenant()).isEqualTo(10);         // 10 rounds → exactly 10 entries
+        } finally {
+            workers.shutdownNow();                                   // always clean up the threads
+        }
+    }
+
+    @Test
+    void unbalancedEntrySavesNothing() {
+        // The "forgot the fee line" mistake: debits 7738, credits 8000
+        var command = new PostEntryCommand(tenantId, LocalDate.of(2026, 9, 29), "Unbalanced", "unbalanced-1", List.of(
+                new JournalLineRequest(receivable.getId(), Direction.DEBIT, 7738, "USD"),
+                new JournalLineRequest(revenue.getId(), Direction.CREDIT, 8000, "USD")));
+
+        assertThatThrownBy(() -> ledgerService.postEntry(command))
+                .isInstanceOf(InvalidJournalEntryException.class);
+        assertThat(entryCountForTenant()).isZero();
+    }
+
+    @Test
+    void rejectsUnknownAccount() {
+        UUID madeUp = UUID.randomUUID(); // no such account exists
+        var command = new PostEntryCommand(tenantId, LocalDate.of(2026, 9, 29), "Ghost account", "ghost-1", List.of(
+                new JournalLineRequest(madeUp, Direction.DEBIT, 8000, "USD"),
+                new JournalLineRequest(revenue.getId(), Direction.CREDIT, 8000, "USD")));
+
+        assertThatThrownBy(() -> ledgerService.postEntry(command))
+                .isInstanceOf(InvalidJournalEntryException.class)
+                .hasMessageContaining("Unknown account");
+        assertThat(entryCountForTenant()).isZero();
+    }
+
+    @Test
+    void rejectsCurrencyMismatch() {
+        // Both lines are EUR, so the entry itself is consistent and balanced...
+        // ...but the accounts are USD accounts.
+        var command = new PostEntryCommand(tenantId, LocalDate.of(2026, 9, 29), "Wrong currency", "eur-1", List.of(
+                new JournalLineRequest(receivable.getId(), Direction.DEBIT, 8000, "EUR"),
+                new JournalLineRequest(revenue.getId(), Direction.CREDIT, 8000, "EUR")));
+
+        assertThatThrownBy(() -> ledgerService.postEntry(command))
+                .isInstanceOf(InvalidJournalEntryException.class)
+                .hasMessageContaining("does not match account currency");
+        assertThat(entryCountForTenant()).isZero();
+    }
+
+
 }
