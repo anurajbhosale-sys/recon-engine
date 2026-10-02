@@ -1,6 +1,8 @@
 package com.recon.shared.web;
 
 import com.recon.ledger.AccountNotFoundException;
+import com.recon.ledger.EntryNotFoundException;
+import com.recon.ledger.EntryNotReversibleException;
 import com.recon.ledger.InvalidJournalEntryException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +43,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ProblemDetail handleAccountNotFound(AccountNotFoundException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
         problem.setTitle("Account not found");
+        return problem;
+    }
+
+    @ExceptionHandler(EntryNotFoundException.class)
+    public ProblemDetail handleEntryNotFound(EntryNotFoundException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, e.getMessage());
+        problem.setTitle("Journal entry not found");
+        return problem;
+    }
+
+    // CONCEPT: 409 Conflict = the request is valid, but clashes with the current state
+    @ExceptionHandler(EntryNotReversibleException.class)
+    public ProblemDetail handleNotReversible(EntryNotReversibleException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+        problem.setTitle("Entry cannot be reversed");
         return problem;
     }
 }

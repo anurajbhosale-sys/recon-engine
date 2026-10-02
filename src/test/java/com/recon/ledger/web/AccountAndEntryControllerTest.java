@@ -159,4 +159,25 @@ class AccountAndEntryControllerTest {
                 .andExpect(status().isNotFound())                                       // 404
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON));
     }
+
+    @Test
+    void secondReversalReturns409() throws Exception {
+        String created = mockMvc.perform(post(entriesUrl())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .header("Idempotency-Key", "charge-1001")
+                        .content(saleJson()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String entryId = JsonPath.read(created, "$.entryId");
+
+        mockMvc.perform(post(entriesUrl() + "/" + entryId + "/reversal")
+                        .header("Idempotency-Key", "reverse-a"))
+                .andExpect(status().isCreated());                                       // first: 201
+
+        mockMvc.perform(post(entriesUrl() + "/" + entryId + "/reversal")
+                        .header("Idempotency-Key", "reverse-b"))                        // different key
+                .andExpect(status().isConflict())                                       // second: 409
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail", containsString("already been reversed")));
+    }
 }

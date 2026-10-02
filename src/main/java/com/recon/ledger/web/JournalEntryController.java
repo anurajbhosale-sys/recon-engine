@@ -11,8 +11,8 @@ import org.springframework.web.bind.annotation.*;
 import java.net.URI;
 import java.util.UUID;
 
-@RestController                                          // CONCEPT: handles HTTP, returns JSON
-@RequestMapping("/tenants/{tenantId}/journal-entries")   // CONCEPT: the URL this class answers
+@RestController
+@RequestMapping("/tenants/{tenantId}/journal-entries")
 public class JournalEntryController {
 
     private final LedgerService ledgerService;
@@ -23,11 +23,10 @@ public class JournalEntryController {
 
     @PostMapping
     public ResponseEntity<PostEntryResult> postEntry(
-            @PathVariable UUID tenantId,                              // from the URL
-            @RequestHeader("Idempotency-Key") String idempotencyKey,  // from the header, Stripe-style
-            @Valid @RequestBody PostEntryRequest body) {              // from the JSON body, validated
+            @PathVariable UUID tenantId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody PostEntryRequest body) {
 
-        // Translate the API shape → the internal command
         var command = new PostEntryCommand(
                 tenantId,
                 body.effectiveDate(),
@@ -37,13 +36,26 @@ public class JournalEntryController {
                         .map(l -> new JournalLineRequest(l.accountId(), l.direction(), l.amountMinor(), l.currency()))
                         .toList());
 
-        PostEntryResult result = ledgerService.postEntry(command);
+        return toResponse(tenantId, ledgerService.postEntry(command));
+    }
 
-        // CONCEPT: the status code tells the client what happened
+    // NEW: POST /tenants/{tenantId}/journal-entries/{entryId}/reversal
+    // CONCEPT: no body needed. The server builds the mirror entry from the original.
+    @PostMapping("/{entryId}/reversal")
+    public ResponseEntity<PostEntryResult> reverseEntry(
+            @PathVariable UUID tenantId,
+            @PathVariable UUID entryId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey) {
+
+        return toResponse(tenantId, ledgerService.reverseEntry(tenantId, entryId, idempotencyKey));
+    }
+
+    // CONCEPT: one place for "201 + Location if new, 200 if replay" (DRY)
+    private ResponseEntity<PostEntryResult> toResponse(UUID tenantId, PostEntryResult result) {
         if (result.created()) {
             URI location = URI.create("/tenants/" + tenantId + "/journal-entries/" + result.entryId());
-            return ResponseEntity.created(location).body(result);   // 201 Created + Location header
+            return ResponseEntity.created(location).body(result);
         }
-        return ResponseEntity.ok(result);                            // 200 OK = duplicate, already done
+        return ResponseEntity.ok(result);
     }
 }

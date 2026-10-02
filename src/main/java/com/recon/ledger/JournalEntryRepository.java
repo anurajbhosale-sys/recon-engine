@@ -9,4 +9,6 @@ public interface JournalEntryRepository extends JpaRepository<JournalEntry, UUID
     // Fast because of the UNIQUE (tenant_id, idempotency_key) constraint,
     // which Postgres backs with an index automatically.
     Optional<JournalEntry> findByTenantIdAndIdempotencyKey(UUID tenantId, String idempotencyKey);
+    // CONCEPT: Spring generates "SELECT EXISTS(... WHERE reverses_entry_id = ?)"
+    boolean existsByReversesEntryId(UUID reversesEntryId);
 }

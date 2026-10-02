@@ -6,6 +6,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
@@ -46,6 +48,54 @@ public class LedgerService {
         }
     }
 
+    public PostEntryResult reverseEntry(UUID tenantId, UUID entryId, String idempotencyKey) {
+        // 1. Replay check FIRST: a retried reversal must get 200, not "already reversed" 409
+        var replay = entryRepository.findByTenantIdAndIdempotencyKey(tenantId, idempotencyKey);
+        if (replay.isPresent()) {
+            return new PostEntryResult(replay.get().getId(), false);
+        }
+
+        // 2. The original must exist and belong to this tenant (another tenant's entry looks missing)
+        JournalEntry original = entryRepository.findById(entryId)
+                .filter(e -> e.getTenantId().equals(tenantId))
+                .orElseThrow(() -> new EntryNotFoundException(entryId));
+
+        // 3. Decision (ADR 003): only original entries can be reversed
+        if (original.getReversesEntryId() != null) {
+            throw new EntryNotReversibleException("Entry " + entryId + " is itself a reversal and cannot be reversed");
+        }
+
+        // 4. At most once (the V3 UNIQUE constraint is the real guarantee; this gives a clear error)
+        if (entryRepository.existsByReversesEntryId(entryId)) {
+            throw new EntryNotReversibleException("Entry " + entryId + " has already been reversed");
+        }
+
+        // 5. Mirror the original: same accounts and amounts, every direction flipped
+        List<JournalLineRequest> flipped = lineRepository.findByEntryId(entryId).stream()
+                .map(line -> new JournalLineRequest(
+                        line.getAccountId(),
+                        line.getDirection().opposite(),
+                        line.getAmountMinor(),
+                        line.getCurrency()))
+                .toList();
+
+        var command = new PostEntryCommand(
+                tenantId,
+                LocalDate.now(),                       // the correction happens today; the original's date is untouched
+                "Reversal of " + entryId,
+                idempotencyKey,
+                flipped,
+                entryId);                              // links the reversal to the original
+
+        // 6. Reuse the normal posting path: validation, account checks, idempotency, transaction
+        try {
+            return postEntry(command);
+        } catch (DataIntegrityViolationException e) {
+            // 7. Lost a race against a DIFFERENT reversal request → the V3 constraint blocked us
+            throw new EntryNotReversibleException("Entry " + entryId + " has already been reversed");
+        }
+    }
+
     @Transactional(readOnly = true) // CONCEPT: a read-only transaction. Safe here: it's called from the controller, another class.
     public AccountBalance getBalance(UUID tenantId, UUID accountId) {
         // Same rule as posting: another tenant's account looks exactly like a missing one
@@ -81,7 +131,7 @@ public class LedgerService {
                 command.effectiveDate(),
                 command.description(),
                 command.idempotencyKey(),
-                null));
+                command.reversesEntryId()));   // null for normal entries, the original's id for reversals
 
         // 5. Build the lines, each pointing at the saved entry's id
         var journalLines = command.lines().stream()
