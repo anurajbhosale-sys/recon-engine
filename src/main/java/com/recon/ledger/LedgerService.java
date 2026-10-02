@@ -3,6 +3,7 @@ package com.recon.ledger;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
@@ -43,6 +44,19 @@ public class LedgerService {
                     // CONCEPT: if no entry exists, the violation was something ELSE → don't hide it
                     .orElseThrow(() -> e);
         }
+    }
+
+    @Transactional(readOnly = true) // CONCEPT: a read-only transaction. Safe here: it's called from the controller, another class.
+    public AccountBalance getBalance(UUID tenantId, UUID accountId) {
+        // Same rule as posting: another tenant's account looks exactly like a missing one
+        Account account = accountRepository.findById(accountId)
+                .filter(a -> a.getTenantId().equals(tenantId))
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+
+        long net = lineRepository.netDebitMinusCredit(accountId);           // debits − credits
+        long balance = account.getType().isDebitNormal() ? net : -net;     // flip for credit-normal
+
+        return new AccountBalance(account.getId(), account.getCode(), account.getCurrency(), balance);
     }
 
     private PostEntryResult postInTransaction(PostEntryCommand command) {
