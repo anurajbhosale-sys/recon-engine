@@ -58,4 +58,28 @@ class JournalEntryRulesTest {
         assertThatThrownBy(() -> new JournalLineRequest(receivable, Direction.DEBIT, 0, "USD"))
                 .isInstanceOf(InvalidJournalEntryException.class);
     }
+
+    @Test
+    void rejectsOverflowingTotals() {
+        var lines = List.of(
+                new JournalLineRequest(receivable, Direction.DEBIT, JournalLineRequest.MAX_AMOUNT_MINOR, "USD"),
+                new JournalLineRequest(fees, Direction.DEBIT, JournalLineRequest.MAX_AMOUNT_MINOR, "USD"),
+                new JournalLineRequest(revenue, Direction.CREDIT, 1, "USD"));
+
+        assertThatThrownBy(() -> JournalEntryRules.validate(lines))
+                .isInstanceOf(InvalidJournalEntryException.class);
+    }
+
+    @Test
+    void rejectsAmountAboveMaximum() {
+        assertThatThrownBy(() -> new JournalLineRequest(receivable, Direction.DEBIT,
+                JournalLineRequest.MAX_AMOUNT_MINOR + 1, "USD"))
+                .isInstanceOf(InvalidJournalEntryException.class);
+    }
+    @Test
+    void rejectsNullDirection() {
+        assertThatThrownBy(() -> new JournalLineRequest(receivable, null, 100, "USD"))
+                .isInstanceOf(InvalidJournalEntryException.class)
+                .hasMessageContaining("required");
+    }
 }

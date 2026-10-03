@@ -4,40 +4,42 @@ import java.util.List;
 
 public final class JournalEntryRules {
 
-    private JournalEntryRules() {} // CONCEPT: static utility class, so no instances
+    private JournalEntryRules() {}
 
     public static void validate(List<JournalLineRequest> lines) {
+        // Check 0: at least 2 lines
         if (lines == null || lines.size() < 2) {
             throw new InvalidJournalEntryException("An entry needs at least 2 lines");
         }
-        var currency = lines.get(0).currency();
 
+        // Rule 1: every line uses the same currency
+        var currency = lines.get(0).currency();
         for (JournalLineRequest line : lines) {
             if (!currency.equals(line.currency())) {
-                throw new InvalidJournalEntryException(
-                        "All journal lines must use the same currency"
-                );
+                throw new InvalidJournalEntryException("All journal lines must use the same currency");
             }
         }
 
-        long totalDebits = lines.stream()
-                .filter(line -> line.direction() == Direction.DEBIT)
-                .mapToLong(JournalLineRequest::amountMinor)   // CONCEPT: mapToLong gives a LongStream, and sum() adds it
-                .sum();
-
-        long totalCredits = lines.stream()
-                .filter(line -> line.direction() == Direction.CREDIT)
-                .mapToLong(JournalLineRequest::amountMinor)
-                .sum();
+        // Rule 2: total debits must equal total credits
+        long totalDebits = 0;
+        long totalCredits = 0;
+        try {
+            for (JournalLineRequest line : lines) {
+                if (line.direction() == Direction.DEBIT) {
+                    // CONCEPT: addExact throws instead of silently wrapping around past Long.MAX_VALUE
+                    totalDebits = Math.addExact(totalDebits, line.amountMinor());
+                } else {
+                    totalCredits = Math.addExact(totalCredits, line.amountMinor());
+                }
+            }
+        } catch (ArithmeticException e) {
+            // CONCEPT: turn the overflow into OUR exception → the client gets a clean 400, not a 500
+            throw new InvalidJournalEntryException("Entry total is out of range");
+        }
 
         if (totalDebits != totalCredits) {
             throw new InvalidJournalEntryException(
                     "Unbalanced entry: debits=" + totalDebits + ", credits=" + totalCredits);
         }
-        // TODO(human): implement the remaining two rules
-        // 1. Every line must have the same currency as the first line.
-        //    If not, throw InvalidJournalEntryException.
-        // 2. Add up all DEBIT amounts and all CREDIT amounts separately.
-        //    If they're not equal, throw InvalidJournalEntryException.
     }
 }

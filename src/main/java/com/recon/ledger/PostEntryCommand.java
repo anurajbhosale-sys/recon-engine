@@ -13,7 +13,7 @@ public record PostEntryCommand(
         UUID reversesEntryId) {          // NEW: null for normal entries, set for reversals
 
     public PostEntryCommand {
-        if (tenantId == null || effectiveDate == null || idempotencyKey == null || idempotencyKey.isBlank()) {
+        if (tenantId == null || effectiveDate == null || idempotencyKey == null || idempotencyKey.isBlank() || lines == null) {
             throw new InvalidJournalEntryException("tenantId, effectiveDate and idempotencyKey are required");
         }
         lines = List.copyOf(lines);

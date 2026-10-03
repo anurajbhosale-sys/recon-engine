@@ -162,6 +162,56 @@ class LedgerServiceIntegrationTest {
         assertThat(entryCountForTenant()).isZero();
     }
 
+    @Test
+    void reversalWithKeyUsedByAnotherEntryIsRejected() {
+        var original = ledgerService.postEntry(charge("k1"));
+
+        // Reversing with the SAME key the sale used → must not pretend it was reversed
+        assertThatThrownBy(() -> ledgerService.reverseEntry(tenantId, original.entryId(), "k1"))
+                .isInstanceOf(IdempotencyKeyReusedException.class);
+
+        // And the sale must still be un-reversed: balances unchanged
+        assertThat(ledgerService.getBalance(tenantId, receivable.getId()).balanceMinor()).isEqualTo(7738);
+    }
+
+    @Test
+    void concurrentReversalsReverseOnlyOnce() throws Exception {
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 10; round++) {
+                var original = ledgerService.postEntry(charge("charge-" + round));
+                CountDownLatch startingGun = new CountDownLatch(1);
+
+                // Two DIFFERENT keys → two genuinely different reversal requests
+                Future<PostEntryResult> a = workers.submit(() -> {
+                    startingGun.await();
+                    return ledgerService.reverseEntry(tenantId, original.entryId(), "rev-a-" + original.entryId());
+                });
+                Future<PostEntryResult> b = workers.submit(() -> {
+                    startingGun.await();
+                    return ledgerService.reverseEntry(tenantId, original.entryId(), "rev-b-" + original.entryId());
+                });
+                startingGun.countDown();
+
+                // Exactly one wins; the other must fail with "already reversed", never a raw DB error
+                int successes = 0;
+                for (Future<PostEntryResult> f : List.of(a, b)) {
+                    try {
+                        f.get();
+                        successes++;
+                    } catch (java.util.concurrent.ExecutionException e) {
+                        assertThat(e.getCause()).isInstanceOf(EntryNotReversibleException.class);
+                    }
+                }
+                assertThat(successes).isEqualTo(1);
+            }
+            // 10 originals + exactly 10 reversals
+            assertThat(entryCountForTenant()).isEqualTo(20);
+        } finally {
+            workers.shutdownNow();
+        }
+    }
+
 
 
 

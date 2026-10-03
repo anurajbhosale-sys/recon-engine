@@ -50,9 +50,14 @@ public class LedgerService {
 
     public PostEntryResult reverseEntry(UUID tenantId, UUID entryId, String idempotencyKey) {
         // 1. Replay check FIRST: a retried reversal must get 200, not "already reversed" 409
+        // 1. Replay check FIRST, but only a genuine replay of THIS reversal counts
         var replay = entryRepository.findByTenantIdAndIdempotencyKey(tenantId, idempotencyKey);
         if (replay.isPresent()) {
-            return new PostEntryResult(replay.get().getId(), false);
+            JournalEntry existing = replay.get();
+            if (entryId.equals(existing.getReversesEntryId())) {
+                return new PostEntryResult(existing.getId(), false);   // true replay → 200
+            }
+            throw new IdempotencyKeyReusedException(idempotencyKey);   // key belongs to something else → 422
         }
 
         // 2. The original must exist and belong to this tenant (another tenant's entry looks missing)
@@ -91,9 +96,12 @@ public class LedgerService {
         try {
             return postEntry(command);
         } catch (DataIntegrityViolationException e) {
-            // 7. Lost a race against a DIFFERENT reversal request → the V3 constraint blocked us
+        // 7. Translate ONLY the error we expect: losing the race on our V3 constraint
+        if (violatesConstraint(e, "uq_journal_entries_reverses_entry_id")) {
             throw new EntryNotReversibleException("Entry " + entryId + " has already been reversed");
         }
+        throw e;   // anything else is a real problem → let it surface
+    }
     }
 
     @Transactional(readOnly = true) // CONCEPT: a read-only transaction. Safe here: it's called from the controller, another class.
@@ -170,5 +178,17 @@ public class LedgerService {
                                 + " does not match account currency " + account.getCurrency());
             }
         }
+    }
+
+    // CONCEPT: exceptions wrap each other (Spring → Hibernate → Postgres). Walk the chain via
+    // getCause() until we find Hibernate's exception, which knows the constraint's name.
+    private static boolean violatesConstraint(DataIntegrityViolationException e, String constraintName) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof org.hibernate.exception.ConstraintViolationException cve   // CONCEPT: pattern matching
+                    && constraintName.equalsIgnoreCase(cve.getConstraintName())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

@@ -1,12 +1,10 @@
 package com.recon.shared.web;
 
-import com.recon.ledger.AccountNotFoundException;
-import com.recon.ledger.EntryNotFoundException;
-import com.recon.ledger.EntryNotReversibleException;
-import com.recon.ledger.InvalidJournalEntryException;
+import com.recon.ledger.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -58,6 +56,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ProblemDetail handleNotReversible(EntryNotReversibleException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
         problem.setTitle("Entry cannot be reversed");
+        return problem;
+    }
+
+    @ExceptionHandler(IdempotencyKeyReusedException.class)
+    public ProblemDetail handleKeyReused(IdempotencyKeyReusedException e) {
+        // CONCEPT: 422 = understood, but can't be processed as sent
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatusCode.valueOf(422), e.getMessage());
+        problem.setTitle("Idempotency key reused");
         return problem;
     }
 }
