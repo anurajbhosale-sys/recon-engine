@@ -1,7 +1,7 @@
-# Progress (updated by /handoff at the end of every session)
+# Progress
 
-**Current phase:** 1 — Core ledger & ingestion
-**Last completed slice:** Phase 0 — environment setup complete
-**Next step:** Hand-build the ledger domain model.
-**Open questions:** none (build tool decided: Maven)
-**Known issues:** none
+**Current phase:** 0 (hand-built foundation): ledger core complete
+**Last completed:** Day 6: controller tests, reversals (ADR 003), review fixes C1, M2, H2, M1
+**Next step:** H1: reject a reused idempotency key with a different request (422)
+**Open questions:** none
+**Known issues:** see docs/known-issues.md
